@@ -1,0 +1,371 @@
+/* ---------- Reset & base ---------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  overflow-x: hidden;
+}
+
+body {
+  font-family: 'EB Garamond', Garamond, 'Times New Roman', serif;
+  font-size: 17px;
+  line-height: 1.45;
+  color: #222;
+  background: #fdfdfd;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+  font-feature-settings: "kern", "liga", "onum";
+}
+
+/* ---------- Headings ---------- */
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 2.5rem 0 1rem;
+}
+
+h1:first-of-type {
+  margin-top: 1rem;
+}
+
+h1 {
+  font-size: 2rem;
+}
+
+h2 {
+  font-size: 1.5rem;
+}
+
+h3 {
+  font-size: 1.2rem;
+}
+
+h4 {
+  font-size: 1.05rem;
+}
+
+/* ---------- Paragraphs and text ---------- */
+p {
+  margin: 0 0 1rem;
+}
+
+em,
+i {
+  font-style: italic;
+}
+
+strong,
+b {
+  font-weight: 600;
+}
+
+/* ---------- Links ---------- */
+a {
+  color: #222;
+  text-decoration: underline;
+}
+
+a:visited {
+  color: #222;
+}
+
+a:hover {
+  text-decoration: none;
+}
+
+/* ---------- Section divider (typographic ornament) ---------- */
+hr {
+  border: none;
+  height: auto;
+  text-align: center;
+  margin: 2.5rem 0;
+  overflow: visible;
+  display: block;
+}
+
+hr::before {
+  content: "❦";
+  display: inline-block;
+  font-family: 'EB Garamond', Garamond, serif;
+  font-size: 1.5rem;
+  color: #555;
+  letter-spacing: normal;
+  line-height: 1;
+}
+
+hr.scene {
+  margin: 1.75rem 0;
+}
+
+hr.scene::before {
+  font-size: 1.25rem;
+}
+
+/* ---------- Blockquotes (used for epigraphs) ---------- */
+blockquote {
+  margin: 1.5rem 0 1.5rem 1.5rem;
+  padding-left: 1rem;
+  border-left: 2px solid #bbb;
+  color: #444;
+  font-style: italic;
+}
+
+blockquote p {
+  margin: 0 0 0.5rem;
+}
+
+blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* ---------- Definition lists ---------- */
+dl {
+  margin: 1rem 0;
+}
+
+dt {
+  font-weight: 600;
+  margin-top: 0.75rem;
+}
+
+dd {
+  margin: 0 0 0.25rem 2rem;
+}
+
+/* ---------- Lists ---------- */
+ul,
+ol {
+  margin: 0 0 1rem;
+  padding-left: 1.5rem;
+}
+
+ul {
+  list-style: disc;
+}
+
+ol {
+  list-style: decimal;
+}
+
+li {
+  margin-bottom: 0.25rem;
+}
+
+/* ---------- Site header ---------- */
+header.site-header {
+  display: flex;
+  align-items: baseline;
+  margin: 0.5rem 0 2rem;
+}
+
+header.site-header .site-title {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+header.site-header nav.site-nav {
+  margin-left: auto;
+}
+
+/* ---------- Navigation ---------- */
+nav.site-nav {
+  margin: 0;
+}
+
+nav.site-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  list-style: none;
+  gap: 0.25rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  justify-content: flex-end;
+}
+
+nav.site-nav ul li {
+  margin-bottom: 0;
+}
+
+/* ---------- Tables ---------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+}
+
+td,
+th {
+  padding: 0.35rem 0.6rem;
+  vertical-align: top;
+  text-align: left;
+}
+
+td:first-child {
+  white-space: nowrap;
+  color: #555;
+  width: 9rem;
+}
+
+/* ---------- Images ---------- */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1.5rem auto;
+}
+
+figure {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+figcaption {
+  font-size: 0.9em;
+  font-style: italic;
+  color: #555;
+  margin-top: 0.5rem;
+}
+
+/* ---------- Footnotes ---------- */
+.footnotes {
+  font-size: 0.92em;
+  margin-top: 3rem;
+  border-top: 1px solid #ccc;
+  padding-top: 1rem;
+  color: #333;
+}
+
+.footnotes ol {
+  padding-left: 1.5rem;
+}
+
+sup a {
+  text-decoration: none;
+}
+
+/* ---------- Code ---------- */
+code,
+pre {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+pre {
+  background: #f4f4f4;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  border-radius: 3px;
+}
+
+/* ---------- Site title ---------- */
+.site-title {
+  font-size: 2.25rem;
+  font-weight: 600;
+  margin: 0.5rem 0 0.25rem;
+}
+
+/* ---------- Small utility ---------- */
+.muted {
+  color: #666;
+}
+
+.small {
+  font-size: 0.9em;
+}
+
+/* ---------- Home page ---------- */
+.about-portrait {
+  float: left;
+  width: 180px;
+  margin-right: 1.75rem;
+  margin-bottom: 1rem;
+}
+
+.about-portrait img {
+  width: 180px;
+  height: 200px;
+  object-fit: cover;
+  object-position: top;
+  display: block;
+  margin: 0;
+}
+
+.about-section::after {
+  content: '';
+  display: table;
+  clear: both;
+}
+
+.social-links {
+  display: flex;
+  justify-content: center;
+  gap: 2rem;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+}
+
+.social-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.social-link svg {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+}
+
+/* ---------- Film entries ---------- */
+.film-entry {
+  margin-bottom: 0.35rem;
+}
+
+.film-entry h3 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+/* Clearfix so the container spans the floated poster */
+.film-body::after {
+  content: '';
+  display: table;
+  clear: both;
+}
+
+.film-poster {
+  float: left;
+  width: 80px;
+  margin-right: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.film-poster img {
+  width: 80px;
+  height: 120px;
+  object-fit: cover;
+  display: block;
+  margin: 0;
+}
+
+.star-rating {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  margin-top: 5px;
+  width: 80px;
+}
+
+.star-rating .star {
+  width: 13px;
+  height: 13px;
+  display: block;
+  flex-shrink: 0;
+}
