@@ -6,6 +6,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Making gVisor Filesystems Faster with EROFS</title>
   <link rel="canonical" href="https://amitsai.com/writing/erofs-gvisor/">
+  <meta name="description"
+    content="How moving container filesystem metadata into gVisor made agentic workloads and directory traversal substantially faster.">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="Making gVisor Filesystems Faster with EROFS">
+  <meta property="og:description"
+    content="How moving container filesystem metadata into gVisor made agentic workloads and directory traversal substantially faster.">
+  <meta property="og:url" content="https://amitsai.com/writing/erofs-gvisor/">
+  <meta property="og:image" content="https://amitsai.com/img/writing/erofs-read-path.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="2074">
+  <meta property="og:image:height" content="846">
+  <meta property="og:image:alt" content="The read path through gVisor with an EROFS container image">
+  <meta property="article:published_time" content="2026-09-04">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Making gVisor Filesystems Faster with EROFS">
+  <meta name="twitter:description"
+    content="How moving container filesystem metadata into gVisor made agentic workloads and directory traversal substantially faster.">
+  <meta name="twitter:image" content="https://amitsai.com/img/writing/erofs-read-path.png">
+  <meta name="twitter:image:alt" content="The read path through gVisor with an EROFS container image">
   <link rel="icon" type="image/png" href="/img/favicon.png?v=3">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
