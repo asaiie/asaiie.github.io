@@ -26,7 +26,7 @@
   </header>
 
   <h1>Making gVisor Filesystems Faster with EROFS</h1>
-  <p class="muted small">Published September 4, 2026</p>
+  <p class="muted small">September 4, 2026</p>
 
   <p>This summer at Modal, I worked on improving filesystem performance for workloads running inside gVisor. One of
     the largest improvements came from replacing ImageFS with EROFS as the default filesystem for container images.</p>
@@ -57,12 +57,10 @@
     ImageFS server. ImageFS resolved the requested path or metadata and retrieved data from Blobnet when necessary.</p>
 
   <figure>
-    <a href="/img/writing/imagefs-read-path.png" target="_blank" rel="noopener noreferrer">
-      <img src="/img/writing/imagefs-read-path.png"
-        alt="ImageFS read path: application file operations pass from the gVisor sentry through the host VFS and FUSE mount to ImageFS and Blobnet"
-        loading="lazy">
-    </a>
-    <figcaption>With ImageFS, every file operation becomes a host system call. Click to view full size.</figcaption>
+    <img src="/img/writing/imagefs-read-path.png"
+      alt="ImageFS read path: application file operations pass from the gVisor sentry through the host VFS and FUSE mount to ImageFS and Blobnet"
+      loading="lazy">
+    <figcaption>With ImageFS, every file operation becomes a host system call.</figcaption>
   </figure>
 
   <p>This meant that even simple operations such as <code>stat</code> and <code>readdir</code> crossed the sandbox
@@ -79,13 +77,10 @@
     longer require host system calls.</p>
 
   <figure>
-    <a href="/img/writing/erofs-read-path.png" target="_blank" rel="noopener noreferrer">
-      <img src="/img/writing/erofs-read-path.png"
-        alt="EROFS read path: the gVisor sentry handles metadata from a memory-mapped EROFS image while file reads continue through the host VFS and FUSE mount"
-        loading="lazy">
-    </a>
-    <figcaption>With EROFS, metadata operations stay in memory and only file reads cross into the host. Click to view
-      full size.</figcaption>
+    <img src="/img/writing/erofs-read-path.png"
+      alt="EROFS read path: the gVisor sentry handles metadata from a memory-mapped EROFS image while file reads continue through the host VFS and FUSE mount"
+      loading="lazy">
+    <figcaption>With EROFS, metadata operations stay in memory and only file reads cross into the host.</figcaption>
   </figure>
 
   <p>File contents still travel through the host VFS and FUSE mount when they are not already in the page cache. The
@@ -109,7 +104,7 @@
     </thead>
     <tbody>
       <tr>
-        <td>Agentic workload</td>
+        <td><code>agentic</code></td>
         <td>168.98s</td>
         <td>45.33s</td>
         <td>3.7×</td>
