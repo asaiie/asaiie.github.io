@@ -28,33 +28,48 @@
   <h1>Making gVisor Filesystems Faster with EROFS</h1>
   <p class="muted small">September 4, 2026</p>
 
-  <p>This summer at Modal, I worked on improving filesystem performance for workloads running inside gVisor. One of
-    the largest improvements came from replacing ImageFS with EROFS as the default filesystem for container images.</p>
+  <p>Development workloads spend a surprising amount of time asking the filesystem about files rather than reading
+    them. Commands like <code>find</code> and <code>ripgrep</code> walk directory trees and inspect metadata for thousands
+    of paths. Package managers and coding agents repeat those operations across entire repositories. Each lookup is
+    small, but its fixed overhead adds up.</p>
 
-  <p>The change made metadata-heavy operations as much as 12 times faster while preserving the performance of large
-    reads.</p>
+  <p>This summer at Modal, I worked on reducing that overhead for containers running inside gVisor. The existing
+    filesystem required most file operations to cross into the host kernel. By switching container images to EROFS,
+    gVisor could resolve metadata directly from memory and reserve host system calls for operations that actually need
+    file contents.</p>
 
-  <h2>Some context</h2>
+  <p>The change made a representative agentic workload 3.7× faster and a directory-tree traversal 12.1× faster. Large
+    reads remained at parity, while writes continued through the same upper overlay as before. The improvement was
+    concentrated where we expected it: workloads dominated by path traversal and metadata access.</p>
 
-  <p>At Modal, user code runs in sandboxed containers. Those containers use gVisor, an application kernel that sits
-    between a program and the host Linux kernel. Instead of allowing every system call to reach the host directly,
-    gVisor implements much of the Linux system interface in a userspace process called the sentry.</p>
+  <h2>First, where does a container's filesystem come from?</h2>
 
-  <p>A container also needs a filesystem. Most of its files come from a read-only container image: the operating-system
-    files, libraries, packages, and source code that were present when the image was built. Before this project, Modal
-    exposed those files to gVisor using an internal system called ImageFS.</p>
+  <p>A container is, roughly, a process with a root filesystem and a restricted view of the machine. Its image contains
+    the operating-system files, libraries, packages, and application code assembled when the image was built. That
+    image is mostly read-only; changes made while the container is running go into a separate writable overlay.</p>
 
-  <p>ImageFS presented the container image as a normal directory tree owned by the host. It worked, but it meant that
-    gVisor had to ask the host for help each time an application looked up a path, inspected metadata, or read a
-    directory. That overhead becomes significant in workloads that touch thousands of files.</p>
+  <p>Downloading and unpacking an entire image before starting a container would be painfully slow. Modal instead uses
+    a custom filesystem called ImageFS. ImageFS lazily serves container files from a multi-tier, content-addressed
+    cache. Startup only needs a small metadata index; file contents can arrive later, when an application actually
+    reads them. This is a great trade for cold-start latency because most files in a typical image are never touched.</p>
 
-  <h2>The read path with ImageFS</h2>
+  <p>Modal also runs untrusted workloads with gVisor. gVisor is an application kernel: from the sandboxed program's
+    perspective it behaves like Linux, but its sentry implements the system-call interface in a userspace process. The
+    host kernel sees the sentry, not the individual processes and kernel objects that the sentry is virtualizing.</p>
 
-  <p>When an application inside a sandbox opened a file, read a directory, or requested file metadata, the operation
-    first trapped into the gVisor sentry.</p>
+  <p>That extra boundary is valuable for isolation, but boundaries are not free. If the sentry cannot answer a request
+    itself, it has to make a real host system call. The way ImageFS exposed files made this especially noticeable for
+    metadata-heavy workloads.</p>
 
-  <p>The sentry then made a host system call, which traveled through the host VFS and a FUSE mount before reaching the
-    ImageFS server. ImageFS resolved the requested path or metadata and retrieved data from Blobnet when necessary.</p>
+  <h2>ImageFS made every file operation visit the host</h2>
+
+  <p>ImageFS exposed a normal file tree owned by the host. An application call such as <code>open</code>,
+    <code>stat</code>, <code>readdir</code>, or <code>read</code> first trapped into the gVisor sentry. To service it, the
+    sentry issued a host system call into the host VFS.</p>
+
+  <p>If the requested data was already in the Linux page cache, the path could stop there. On a miss, the VFS forwarded
+    the request through a FUSE mount to the ImageFS server, which resolved the file and fetched its contents from
+    Modal's Blobnet storage layer when necessary.</p>
 
   <figure>
     <img src="/img/writing/imagefs-read-path.png"
@@ -63,18 +78,26 @@
     <figcaption>With ImageFS, every file operation becomes a host system call.</figcaption>
   </figure>
 
-  <p>This meant that even simple operations such as <code>stat</code> and <code>readdir</code> crossed the sandbox
-    boundary and entered the host kernel. A workload that examined thousands of files had to pay this cost thousands
-    of times.</p>
+  <p>This architecture is well suited to large reads. Once you ask for megabytes of file contents, the fixed cost of a
+    system call and a few context switches is small relative to the data transfer. Metadata operations are the opposite:
+    they do almost no useful work per call. Asking for a handful of inode fields can cost more in transitions than in
+    data movement.</p>
 
-  <h2>Moving metadata into the sandbox</h2>
+  <p>Tools that explore a filesystem amplify that fixed cost. <code>find</code> reads every directory entry and stats
+    many of the paths it discovers. Package managers inspect thousands of files. Coding agents repeatedly search,
+    inspect, edit, and re-scan repositories. With ImageFS, each small operation paid at least one trip into the host
+    kernel, whether or not FUSE or Blobnet had any work to do.</p>
 
-  <p>EROFS, short for Enhanced Read-Only File System, takes a different approach. Instead of exposing an entire
-    host-owned file tree, it packages the container image as a block-structured filesystem image.</p>
+  <h2>EROFS lets the sentry answer for itself</h2>
 
-  <p>The sparse EROFS image is memory-mapped into the sentry. gVisor's EROFS driver can then parse its superblock,
-    inodes, and directory entries directly from memory. Operations such as directory traversal and metadata lookup no
-    longer require host system calls.</p>
+  <p><a href="https://docs.kernel.org/filesystems/erofs.html" target="_blank" rel="noopener noreferrer">EROFS</a>, or
+    Enhanced Read-Only File System, stores a filesystem as a block-structured image. Read-only container layers are a
+    natural fit: their directory structure and metadata do not change after the image is built.</p>
+
+  <p>Instead of mounting a host-owned tree, we give the sentry a sparse EROFS image and memory-map it into the sentry's
+    address space. gVisor's EROFS driver parses the superblock, inodes, directory entries, and file extents directly.
+    Once that metadata is resident, a pathname lookup or <code>stat</code> is just gVisor reading memory it already owns.
+    No host syscall is necessary.</p>
 
   <figure>
     <img src="/img/writing/erofs-read-path.png"
@@ -83,15 +106,44 @@
     <figcaption>With EROFS, metadata operations stay in memory and only file reads cross into the host.</figcaption>
   </figure>
 
-  <p>File contents still travel through the host VFS and FUSE mount when they are not already in the page cache. The
-    important difference is that the FUSE server now serves one image file rather than resolving every operation
-    against a full file tree.</p>
+  <p>A read still needs bytes. If they are not already available to the sentry, it issues a host call that travels
+    through the VFS and FUSE mount. But the FUSE server now exposes one sparse image file instead of implementing the
+    semantics of an entire directory tree. Blobnet and its caches remain responsible for supplying missing image data.</p>
 
-  <p>In short, metadata stays inside the sandbox; only reads need to cross into the host.</p>
+  <p>This distinction is the whole optimization: EROFS does not make crossing the boundary magically free. It gives the
+    sentry enough structure to avoid crossing it unless the application actually needs file contents.</p>
 
-  <h2>Results</h2>
+  <h2>The distributions tell the story</h2>
 
-  <p>This design has its largest effect on workloads that inspect or manipulate many files:</p>
+  <p>The charts below are empirical cumulative distribution functions, or eCDFs. For any time on the horizontal axis,
+    the curve's height is the fraction of benchmark runs that finished by then. A curve farther to the left is faster;
+    a steep curve means the results are tightly clustered. EROFS is orange and ImageFS is blue.</p>
+
+  <h3>Metadata-heavy workloads move decisively left</h3>
+
+  <p>The broadest benchmark was <code>agentic</code>, a representative agent workflow that exercises the filesystem as
+    part of a larger task. Its median runtime fell from 168.98 seconds to 45.33 seconds, a 3.7× speedup. The shape of
+    the curve matters too: EROFS completes nearly every run before the ImageFS distribution reaches its slow cluster.</p>
+
+  <figure>
+    <img src="/img/writing/agentic-ecdf.png"
+      alt="Empirical cumulative distribution for the agentic benchmark, with EROFS in orange completing substantially faster than ImageFS in blue"
+      loading="lazy">
+    <figcaption>The <code>agentic</code> benchmark improves from 168.98s to 45.33s at the median.</figcaption>
+  </figure>
+
+  <p>A focused tree walk makes the mechanism even clearer. <code>find-all</code> mostly asks the filesystem to enumerate
+    directories and inspect entries. Those are precisely the operations that now stay inside the sentry, so its median
+    falls from 2.78 seconds to 0.23 seconds.</p>
+
+  <figure>
+    <img src="/img/writing/find-all-ecdf.png"
+      alt="Empirical cumulative distribution for find-all, with EROFS in orange completing much faster than ImageFS in blue"
+      loading="lazy">
+    <figcaption><code>find-all</code> is 12.1× faster because directory metadata no longer takes the host path.</figcaption>
+  </figure>
+
+  <p>The rest of the metadata-heavy benchmarks follow the same pattern:</p>
 
   <table>
     <thead>
@@ -136,22 +188,33 @@
     </tbody>
   </table>
 
-  <p>Large sequential reads remained effectively unchanged. A cold parallel read moved from 0.61 seconds to 0.63
-    seconds, while a warm read remained at 0.05 seconds. These operations still reach the FUSE mount when they miss the
-    page cache, so they primarily measure the two FUSE server implementations rather than the in-memory metadata path.
-  </p>
+  <h3>Large reads stay where they were</h3>
 
-  <p>Writes also do not meaningfully exercise either filesystem. gVisor sends them to an upper overlay that bypasses
-    both ImageFS and EROFS.</p>
+  <p>A large read is dominated by moving data, not looking up metadata. Reads that miss the page cache still travel
+    through the FUSE mount in both designs, so EROFS does not materially change their performance. The new
+    representation removes metadata overhead without trading away the throughput behavior that ImageFS was designed
+    for.</p>
 
-  <h2>The takeaway</h2>
+  <h3>Writes bypass both lower filesystems</h3>
 
-  <p>The biggest improvement did not come from making individual host calls slightly faster. It came from removing
-    those calls from the critical path entirely.</p>
+  <p>EROFS is read-only, but the container is not. gVisor sends writes to the writable upper layer of an overlay, which
+    bypasses both ImageFS and EROFS. Write-heavy workloads therefore behave much as they did before; they do not exercise
+    the read-only layer that this change is meant to accelerate.</p>
 
-  <p>By giving the sentry direct access to filesystem metadata, EROFS turns many cross-boundary operations into ordinary
-    memory lookups. That makes a substantial difference for modern development and agentic workloads, which frequently
-    scan repositories, inspect dependencies, and operate across large numbers of small files.</p>
+  <h2>A narrower interface to the host</h2>
+
+  <p>EROFS does not replace the lazy loading or shared caching that made ImageFS useful. It changes the interface between
+    gVisor and the container image. ImageFS asked the host to expose a file tree; with EROFS, the sentry understands the
+    filesystem layout itself.</p>
+
+  <p>As a result, the host boundary is used mainly to retrieve file data, not to answer routine questions about paths and
+    metadata. That is a smaller architectural change than replacing the storage system, but it removes repeated fixed
+    costs from some of the most common filesystem operations.</p>
+
+  <p>The benchmark profile follows directly from that design. Metadata-heavy tools improve substantially, large reads
+    remain unchanged, and writes continue to bypass the read-only image. For repository scans, package installation,
+    and agentic workloads, eliminating the host round trip from each lookup compounds into a much larger end-to-end
+    improvement.</p>
 
   <script src="/js/main.js" defer></script>
 </body>
