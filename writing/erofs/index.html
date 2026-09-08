@@ -107,7 +107,8 @@
     sentry issues a host system call into the kernel's Virtual Filesystem (VFS). Traversing the host filesystem stack is
     expensive because it crosses the boundary between userspace and kernel space. The gVisor sentry is implemented
     entirely in userspace, and filesystem work which can be resolved entirely within the sentry is relatively cheap.
-    However, ImageFS crosses this boundary on <em>every single filesystem operation</em>.</p>
+    However, ImageFS doesn't stay in-sentry and instead crosses this boundary on <em>every single filesystem
+      operation</em>.</p>
 
   <p>Once the request reaches the kernel VFS, it can either be serviced immediately from page cache memory, or it will
     hit the kernel's FUSE module and be sent to the <a href="https://modal.com/blog/jono-containers-talk" target="_blank"
@@ -132,7 +133,7 @@
 
   <h2>The EROFS path</h2>
 
-  <p>In contrast, EROFS stores a filesystem as a block-structured image which is <code>mmap</code>ed into the gVisor
+  <p>In contrast, EROFS stores a filesystem as a block-structured image which is <code>mmap</code>ped into the gVisor
     sentry. The shared and immutable container images in gVisor's lower layer are a natural fit for EROFS, a
     high-performance read-only filesystem. If we convert a container image into an EROFS image and provide this to
     gVisor at container startup, it can <a href="https://gvisor.dev/docs/user_guide/filesystem/#erofs-rootfs"
