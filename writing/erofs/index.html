@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Making gVisor Filesystems Faster with EROFS</title>
+  <link rel="canonical" href="https://amitsai.com/writing/erofs/">
+  <meta name="description"
+    content="How moving container filesystem metadata into gVisor made agentic workloads and directory traversal substantially faster.">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="Making gVisor Filesystems Faster with EROFS">
+  <meta property="og:description"
+    content="How moving container filesystem metadata into gVisor made agentic workloads and directory traversal substantially faster.">
+  <meta property="og:url" content="https://amitsai.com/writing/erofs/">
+  <meta property="og:image" content="https://amitsai.com/img/writing/erofs-read-path.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="2074">
+  <meta property="og:image:height" content="846">
+  <meta property="og:image:alt" content="The read path through gVisor with an EROFS container image">
+  <meta property="article:published_time" content="2026-09-04">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Making gVisor Filesystems Faster with EROFS">
+  <meta name="twitter:description"
+    content="How moving container filesystem metadata into gVisor made agentic workloads and directory traversal substantially faster.">
+  <meta name="twitter:image" content="https://amitsai.com/img/writing/erofs-read-path.png">
+  <meta name="twitter:image:alt" content="The read path through gVisor with an EROFS container image">
+  <link rel="icon" type="image/png" href="/img/favicon.png?v=3">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,600&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+
+<body>
+
+  <header class="site-header">
+    <nav class="site-nav">
+      <ul>
+        <li><a href="/">home</a></li>
+        <li><a href="/writing/">writing</a></li>
+        <!-- <li><a href="/books.html">books</a></li> -->
+        <!-- <li><a href="/film.html">film</a></li> -->
+      </ul>
+    </nav>
+  </header>
+
+  <h1>Making gVisor Filesystems Faster with EROFS</h1>
+  <p class="muted small">September 4, 2026</p>
+
+  <p>The performance of workloads on Modal depends on the performance of Modal's container filesystem. <a
+      href="https://modal.com/blog/scaling-to-1-million-concurrent-sandboxes-in-seconds">Fast cold starts</a> rely on
+    lazy-loading container images, so that files are only fetched when they are needed and the critical path for
+    container startup doesn't include downloading the entire image. In addition, applications will read, write, and
+    interact with files throughout their lifetime. This is especially true for agentic workloads, which spend much of
+    their time doing metadata-heavy operations such as searching large codebases and loading dependencies.</p>
+
+  <p>This summer at Modal, I worked on improving filesystem performance for sandboxes running on <a
+      href="https://gvisor.dev/">gVisor</a>, an open-source container runtime developed by Google. gVisor exposes a
+    driver for <a href="https://erofs.docs.kernel.org/en/latest/index.html">EROFS</a> (Enhanced Read-Only File System),
+    a high-performance read-only Linux filesystem. Thus, a container with an EROFS root filesystem can resolve
+    filesystem operations within the gVisor sentry, rather than traversing the host filesystem stack.</p>
+
+  <p>To take advantage of this, I replaced the existing filesystem path with a custom-built EROFS image that can be
+    lazily served. By moving filesystem operations onto gVisor's faster, in-sentry EROFS path, I achieved <strong>up to
+      4× speedups on agentic workloads</strong> and <strong>12× faster directory traversals</strong>, all while keeping
+    the benefits of lazy loading for fast container cold starts.</p>
+
+  <h2>How do container filesystems work?</h2>
+
+  <p>A container image includes the operating system files, libraries, packages, and user code assembled when the image
+    was built. An ML workload, for example, might include PyTorch, all its native dependencies, and a large Python
+    environment. A background agent like <a href="https://builders.ramp.com/post/why-we-built-our-background-agent">Ramp's
+      Inspect</a> might include large, pre-built repositories with hundreds of pre-installed packages in its image. Most
+    of these files will never be modified while the container is running. Thus, in order to avoid unnecessary
+    duplication when running multiple containers on the same host, container images are shared and immutable. However,
+    how can containers write and modify files with an immutable image? gVisor solves this by mounting the root
+    filesystem as an <strong>overlay</strong> comprised of two layers.</p>
+
+  <p>The lower layer contains the files from the container image and is <strong>read-only</strong>, allowing all
+    containers created from the same image to share the underlying data without copying it. Each container then gets
+    its own private upper layer, which stores any files it creates or modifies. When a container modifies a file,
+    gVisor first copies it up from the lower layer into the upper layer and modifies that private copy. For reads,
+    gVisor checks the upper layer first, falling back to the lower layer if the file isn't there. From the container's
+    perspective, the distinction is invisible and the two layers appear as a single, writable filesystem.</p>
+
+  <p>The question, then, is how to provide that read-only image layer efficiently. Downloading an entire image from
+    object storage (Cloudflare R2, in Modal's case) and unpacking it before starting a container would be painfully slow
+    and careless, since much of the image's contents may never be accessed. Modal instead uses a custom filesystem
+    called <strong><a href="https://modal.com/blog/truly-serverless-gpus">ImageFS</a></strong> to build and serve
+    container images. At startup, only the filesystem's metadata (stored as an ImageFS index) needs to be available;
+    file contents can be fetched later, when an application actually reads them.</p>
+
+  <h2>The ImageFS path</h2>
+
+  <p>ImageFS serves image contents from a multi-tier, content-addressed cache to deduplicate shared image contents.
+    These bytes are served via <a href="https://www.kernel.org/doc/html/next/filesystems/fuse.html">FUSE</a> (Filesystem
+    in Userspace), a Linux kernel mechanism to implement a custom filesystem in userspace without writing kernel code
+    or modifying the kernel. When an application issues a filesystem operation, such as <code>open</code>,
+    <code>stat</code>, <code>read</code>, or <code>readdir</code>, it traps into the gVisor sentry. To service it, the
+    sentry issues a host system call into the kernel's Virtual Filesystem (VFS). Traversing the host filesystem stack is
+    expensive because it crosses the boundary between userspace and kernel space. The gVisor sentry is implemented
+    entirely in userspace, and filesystem work which can be resolved entirely within the sentry is relatively cheap.
+    However, ImageFS crosses this boundary on <em>every single filesystem operation</em>.</p>
+
+  <p>Once the request reaches the kernel VFS, it can either be serviced immediately from page cache memory, or it will
+    hit the kernel's FUSE module and be sent to the <a href="https://modal.com/blog/jono-containers-talk">ImageFS FUSE
+      server</a>, which once again crosses the boundary between kernel space and userspace (though this crossing is
+    necessary to implement lazy image loading). This FUSE server resolves the file from Modal's Blobnet storage layer,
+    either from local disk cache or R2 object storage.</p>
+
+  <figure>
+    <img src="/img/writing/imagefs-read-path.png"
+      alt="ImageFS read path: application file operations pass from the gVisor sentry through the host VFS and FUSE mount to ImageFS and Blobnet"
+      loading="lazy">
+    <figcaption>With ImageFS, every file operation traverses the host filesystem stack.</figcaption>
+  </figure>
+
+  <p>The ImageFS architecture is well suited for large reads, where the fixed cost of a host syscall and a few context
+    switches is small relative to the data transfer. In contrast, metadata operations do a small amount of actual work,
+    and the cost there is dominated by traversing the host filesystem stack. Tools like package managers and coding
+    agents recursively walk large codebases, which can require hundreds of thousands of path lookups, stats, and
+    directory reads. With ImageFS, each small operation pays a roundtrip regardless of whether FUSE has any work to do.
+  </p>
+
+  <h2>The EROFS path</h2>
+
+  <p>In contrast, EROFS stores a filesystem as a block-structured image which is <code>mmap</code>ed into the gVisor
+    sentry. The shared and immutable container images in gVisor's lower layer are a natural fit for EROFS, a
+    high-performance read-only filesystem. If we convert a container image into an EROFS image and provide this to
+    gVisor at container startup, it can <a href="https://gvisor.dev/docs/user_guide/filesystem/#erofs-rootfs">configure
+      the overlay</a> to have an EROFS lower layer. With this, the sentry can parse most filesystem operations via memory
+    accesses on this mmapped image using its EROFS driver, thus staying entirely within userspace and avoiding an
+    expensive traversal over into the host.</p>
+
+  <p>Building the entire EROFS image at container startup is expensive, and ruins the fast cold starts we get with the
+    ImageFS approach. However, we can have our cake and eat it too! It turns out that gVisor only needs the EROFS
+    superblock at boot time, which we can determine from the small image index we use to achieve fast cold starts in
+    ImageFS. Instead of building the entire EROFS image, we only build a <em>sparse</em> image, which only has the
+    superblock and metadata blocks serialized, and all data blocks <em>left empty</em>. The time it takes to lay out and
+    serialize this sparse image is <code>O(inodes)</code>, which in practice makes a negligible difference to container
+    cold start time.</p>
+
+  <p>When gVisor's EROFS driver tries to parse this sparse image, it will just read zeroes since none of the data is
+    materialized. To fix this, we can return to our good friend FUSE once again. Rather than serving a regular
+    filesystem, our EROFS FUSE server exposes a filesystem with only one file: the sparse EROFS image. When the gVisor
+    driver reads the EROFS image, either it already has the bytes in page cache and can resolve everything in-sentry, or
+    it page-faults and traverses the host filesystem stack, which will eventually hit our single-file FUSE server.</p>
+
+  <p>We can further take advantage of EROFS's block-formatted structure to improve performance. FUSE exposes a mechanism
+    called <code>fuse_notify_store</code> which can push bytes into page cache, so that reading those bytes can be
+    resolved directly from memory without requiring a syscall or a trip to the FUSE server. As a result, we can eagerly
+    push metadata blocks and files that we know the application will access into page cache, resulting in no host
+    syscalls for metadata operations.</p>
+
+  <figure>
+    <img src="/img/writing/erofs-read-path.png"
+      alt="EROFS read path: the gVisor sentry handles metadata from a memory-mapped EROFS image while file reads continue through the host VFS and FUSE mount"
+      loading="lazy">
+    <figcaption>With EROFS, metadata operations stay in memory and only file reads cross into the host.</figcaption>
+  </figure>
+
+  <p>We can also optimize building the sparse EROFS image to improve performance. I tried making this as allocation-free
+    and copy-free as possible in the Rust implementation, since dealing with hundreds of thousands of pathname strings
+    can get expensive if you deal with them naïvely. EROFS offers optimizations to “inline” inode tails, or store the
+    remainder of an inode's data which doesn't fit in a full data block <em>inline</em> with the inode. For many
+    directories, their data doesn't take up an entire block, so we can store the entire directory right next to its
+    inode, which makes directory traversals much faster as we are not pointer chasing to an external block. In addition,
+    for Modal workloads which are repeated and predictable, we can lay out the files of the sparse image in the order
+    they will be accessed in order to improve cache locality.</p>
+
+  <h2>Results</h2>
+
+  <p>After implementing the sparse image builder and EROFS FUSE server, I migrated <strong>all production gVisor
+      sandboxes</strong> from ImageFS to EROFS by the end of my internship. The results are pretty magical:
+    metadata-heavy workloads become much faster and we see shorter tails in p99 latency.</p>
+
+  <p>The broadest benchmark was <code>agentic</code>, a workload which simulates a coding agent with random greps, cats,
+    finds, and more on the Linux code repository. Its median runtime fell from 168.98 seconds to 45.33 seconds, a 3.7×
+    speedup.</p>
+
+  <figure>
+    <img src="/img/writing/agentic-ecdf.png"
+      alt="Empirical cumulative distribution for the agentic benchmark, with EROFS in orange completing substantially faster than ImageFS in blue"
+      loading="lazy">
+  </figure>
+
+  <p>A focused filesystem tree traversal makes the improvement even clearer. The <code>find-all</code> benchmark searches
+    for files and directories within a filesystem, operations which should now stay entirely inside the sentry. Its
+    median runtime fell from 2.78 seconds to 0.23 seconds, a 12.1× speedup!</p>
+
+  <figure>
+    <img src="/img/writing/find-all-ecdf.png"
+      alt="Empirical cumulative distribution for find-all, with EROFS in orange completing much faster than ImageFS in blue"
+      loading="lazy">
+  </figure>
+
+  <p>Other benchmarks show a similar pattern:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Benchmark</th>
+        <th>ImageFS</th>
+        <th>EROFS</th>
+        <th>Speedup</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>agentic</code></td>
+        <td>168.98s</td>
+        <td>45.33s</td>
+        <td>3.7×</td>
+      </tr>
+      <tr>
+        <td><code>chown</code></td>
+        <td>15.72s</td>
+        <td>5.59s</td>
+        <td>2.8×</td>
+      </tr>
+      <tr>
+        <td><code>find-all</code></td>
+        <td>2.78s</td>
+        <td>0.23s</td>
+        <td>12.1×</td>
+      </tr>
+      <tr>
+        <td><code>ripgrep</code></td>
+        <td>9.48s</td>
+        <td>3.53s</td>
+        <td>2.7×</td>
+      </tr>
+      <tr>
+        <td><code>bun install</code></td>
+        <td>10.38s</td>
+        <td>4.14s</td>
+        <td>2.5×</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>Writes have the same performance as before, since they bypass both ImageFS and EROFS and go into gVisor's upper
+    layer. In addition, we retain performance on large read benchmarks, which are dominated by moving data and mostly
+    exercise the FUSE path. These benchmarks ensure that the EROFS FUSE server implementation doesn't regress from the
+    battle-tested ImageFS FUSE server.</p>
+
+  <h2>Conclusion</h2>
+
+  <p>With EROFS, we are able to keep the fast container cold starts enabled by lazy loading while significantly
+    improving filesystem performance by avoiding unnecessary crossings between the gVisor sentry and the host
+    filesystem stack.</p>
+
+  <p>Working on this project gave me an appreciation for how much performance can hide in the details, and I had a lot
+    of fun shaving off milliseconds by avoiding allocations and optimizing byte layouts. I learned an incredible amount
+    taking EROFS end-to-end, from sketching the initial design on a whiteboard to building and benchmarking it, working
+    through the edge cases, and ultimately shipping it as the default in production.</p>
+
+  <p>I'm incredibly grateful to my team and mentors at Modal for all their guidance and support throughout the summer.
+    Thanks for reading, and I hope you enjoyed!</p>
+
+  <script src="/js/main.js" defer></script>
+</body>
+
+</html>
