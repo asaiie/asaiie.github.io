@@ -50,15 +50,17 @@
   <p class="muted small">September 4, 2026</p>
 
   <p>The performance of workloads on Modal depends on the performance of Modal's container filesystem. <a
-      href="https://modal.com/blog/scaling-to-1-million-concurrent-sandboxes-in-seconds">Fast cold starts</a> rely on
+      href="https://modal.com/blog/scaling-to-1-million-concurrent-sandboxes-in-seconds" target="_blank"
+      rel="noopener noreferrer">Fast cold starts</a> rely on
     lazy-loading container images, so that files are only fetched when they are needed and the critical path for
     container startup doesn't include downloading the entire image. In addition, applications will read, write, and
     interact with files throughout their lifetime. This is especially true for agentic workloads, which spend much of
     their time doing metadata-heavy operations such as searching large codebases and loading dependencies.</p>
 
   <p>This summer at Modal, I worked on improving filesystem performance for sandboxes running on <a
-      href="https://gvisor.dev/">gVisor</a>, an open-source container runtime developed by Google. gVisor exposes a
-    driver for <a href="https://erofs.docs.kernel.org/en/latest/index.html">EROFS</a> (Enhanced Read-Only File System),
+      href="https://gvisor.dev/" target="_blank" rel="noopener noreferrer">gVisor</a>, an open-source container runtime
+    developed by Google. gVisor exposes a driver for <a href="https://erofs.docs.kernel.org/en/latest/index.html"
+      target="_blank" rel="noopener noreferrer">EROFS</a> (Enhanced Read-Only File System),
     a high-performance read-only Linux filesystem. Thus, a container with an EROFS root filesystem can resolve
     filesystem operations within the gVisor sentry, rather than traversing the host filesystem stack.</p>
 
@@ -71,8 +73,9 @@
 
   <p>A container image includes the operating system files, libraries, packages, and user code assembled when the image
     was built. An ML workload, for example, might include PyTorch, all its native dependencies, and a large Python
-    environment. A background agent like <a href="https://builders.ramp.com/post/why-we-built-our-background-agent">Ramp's
-      Inspect</a> might include large, pre-built repositories with hundreds of pre-installed packages in its image. Most
+    environment. A background agent like <a href="https://builders.ramp.com/post/why-we-built-our-background-agent"
+      target="_blank" rel="noopener noreferrer">Ramp's Inspect</a> might include large, pre-built repositories with
+    hundreds of pre-installed packages in its image. Most
     of these files will never be modified while the container is running. Thus, in order to avoid unnecessary
     duplication when running multiple containers on the same host, container images are shared and immutable. However,
     how can containers write and modify files with an immutable image? gVisor solves this by mounting the root
@@ -88,14 +91,16 @@
   <p>The question, then, is how to provide that read-only image layer efficiently. Downloading an entire image from
     object storage (Cloudflare R2, in Modal's case) and unpacking it before starting a container would be painfully slow
     and careless, since much of the image's contents may never be accessed. Modal instead uses a custom filesystem
-    called <strong><a href="https://modal.com/blog/truly-serverless-gpus">ImageFS</a></strong> to build and serve
+    called <strong><a href="https://modal.com/blog/truly-serverless-gpus" target="_blank"
+        rel="noopener noreferrer">ImageFS</a></strong> to build and serve
     container images. At startup, only the filesystem's metadata (stored as an ImageFS index) needs to be available;
     file contents can be fetched later, when an application actually reads them.</p>
 
   <h2>The ImageFS path</h2>
 
   <p>ImageFS serves image contents from a multi-tier, content-addressed cache to deduplicate shared image contents.
-    These bytes are served via <a href="https://www.kernel.org/doc/html/next/filesystems/fuse.html">FUSE</a> (Filesystem
+    These bytes are served via <a href="https://www.kernel.org/doc/html/next/filesystems/fuse.html" target="_blank"
+      rel="noopener noreferrer">FUSE</a> (Filesystem
     in Userspace), a Linux kernel mechanism to implement a custom filesystem in userspace without writing kernel code
     or modifying the kernel. When an application issues a filesystem operation, such as <code>open</code>,
     <code>stat</code>, <code>read</code>, or <code>readdir</code>, it traps into the gVisor sentry. To service it, the
@@ -105,8 +110,9 @@
     However, ImageFS crosses this boundary on <em>every single filesystem operation</em>.</p>
 
   <p>Once the request reaches the kernel VFS, it can either be serviced immediately from page cache memory, or it will
-    hit the kernel's FUSE module and be sent to the <a href="https://modal.com/blog/jono-containers-talk">ImageFS FUSE
-      server</a>, which once again crosses the boundary between kernel space and userspace (though this crossing is
+    hit the kernel's FUSE module and be sent to the <a href="https://modal.com/blog/jono-containers-talk" target="_blank"
+      rel="noopener noreferrer">ImageFS FUSE server</a>, which once again crosses the boundary between kernel space and
+    userspace (though this crossing is
     necessary to implement lazy image loading). This FUSE server resolves the file from Modal's Blobnet storage layer,
     either from local disk cache or R2 object storage.</p>
 
@@ -129,8 +135,9 @@
   <p>In contrast, EROFS stores a filesystem as a block-structured image which is <code>mmap</code>ed into the gVisor
     sentry. The shared and immutable container images in gVisor's lower layer are a natural fit for EROFS, a
     high-performance read-only filesystem. If we convert a container image into an EROFS image and provide this to
-    gVisor at container startup, it can <a href="https://gvisor.dev/docs/user_guide/filesystem/#erofs-rootfs">configure
-      the overlay</a> to have an EROFS lower layer. With this, the sentry can parse most filesystem operations via memory
+    gVisor at container startup, it can <a href="https://gvisor.dev/docs/user_guide/filesystem/#erofs-rootfs"
+      target="_blank" rel="noopener noreferrer">configure the overlay</a> to have an EROFS lower layer. With this, the
+    sentry can parse most filesystem operations via memory
     accesses on this mmapped image using its EROFS driver, thus staying entirely within userspace and avoiding an
     expensive traversal over into the host.</p>
 
